@@ -1,0 +1,22 @@
+# Copied into each product repo's .github/workflows/ by bin/uexel-onboard.
+# Fails the PR when docs/ai/HANDOFF.md was not updated on the branch — the deterministic
+# enforcement of "handoff is mandatory".
+name: uexel-handoff-check
+on:
+  pull_request:
+
+jobs:
+  handoff-fresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: HANDOFF.md must be updated on this branch
+        run: |
+          if git diff --name-only "origin/${{ github.base_ref }}...HEAD" | grep -qx 'docs/ai/HANDOFF.md'; then
+            echo "HANDOFF.md updated in this PR — ok"
+          else
+            echo "::error::docs/ai/HANDOFF.md was not updated on this branch. Run /uexel:handoff and commit it."
+            exit 1
+          fi
