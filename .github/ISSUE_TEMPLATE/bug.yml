@@ -1,0 +1,23 @@
+name: Bug
+description: A defect with a reproduction
+labels: ["type:bug", "stage:triage"]
+body:
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Steps, input, and environment that produce the wrong behavior
+    validations:
+      required: true
+  - type: input
+    id: expected
+    attributes:
+      label: Expected
+    validations:
+      required: true
+  - type: input
+    id: actual
+    attributes:
+      label: Actual
+    validations:
+      required: true

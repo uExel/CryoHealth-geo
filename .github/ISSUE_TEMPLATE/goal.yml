@@ -1,0 +1,35 @@
+name: Goal
+description: An outcome with measurable acceptance criteria (creates the unit a milestone tracks)
+labels: ["type:goal", "stage:triage"]
+body:
+  - type: input
+    id: outcome
+    attributes:
+      label: Outcome
+      description: What is true when this goal is done — a number or observable event, not a feeling
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Each line independently checkable
+      placeholder: "- [ ] ..."
+    validations:
+      required: true
+  - type: input
+    id: owner
+    attributes:
+      label: Owner
+    validations:
+      required: true
+  - type: input
+    id: target
+    attributes:
+      label: Target date (YYYY-MM-DD)
+    validations:
+      required: true
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Explicitly out of scope

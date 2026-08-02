@@ -1,0 +1,65 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/check-gstack.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/shaanali/.local/bin/graphify hook-guard search"
+          }
+        ]
+      },
+      {
+        "matcher": "Read|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/shaanali/.local/bin/graphify hook-guard read"
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "deny": [
+      "Read(./**/dist/**)",
+      "Read(./**/build/**)",
+      "Read(./**/.next/**)",
+      "Read(./**/coverage/**)",
+      "Read(./**/*.generated.*)",
+      "Read(./ios/Pods/**)",
+      "Read(./android/app/build/**)",
+      "Read(./.env)",
+      "Read(./.env.local)",
+      "Read(./.env.development)",
+      "Read(./.env.production)",
+      "Read(./.env.test)"
+    ]
+  },
+  "extraKnownMarketplaces": [
+    {
+      "source": "github",
+      "repo": "uExel/cryo-harness"
+    }
+  ],
+  "enabledPlugins": [
+    {
+      "marketplace": "cryo-harness",
+      "plugin": "uexel"
+    },
+    {
+      "marketplace": "claude-plugins-official",
+      "plugin": "typescript-lsp"
+    }
+  ]
+}

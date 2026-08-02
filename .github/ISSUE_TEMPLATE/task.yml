@@ -1,0 +1,44 @@
+name: Task
+description: The unit a Claude session picks up. Linked to one goal; the verification command makes VERIFY mechanical.
+labels: ["type:task", "stage:triage"]
+body:
+  - type: input
+    id: parent-goal
+    attributes:
+      label: Parent goal
+      description: "Goal issue number, e.g. #12. Every task belongs to exactly one goal and its milestone."
+    validations:
+      required: true
+  - type: textarea
+    id: definition-of-done
+    attributes:
+      label: Definition of done
+      description: What is observably true when this task is complete
+    validations:
+      required: true
+  - type: input
+    id: verification-command
+    attributes:
+      label: Verification command
+      description: "The exact command whose exit status decides pass/fail, e.g. `npm test -- src/auth`"
+    validations:
+      required: true
+  - type: dropdown
+    id: loop-budget
+    attributes:
+      label: Loop budget
+      description: Max fix iterations before escalation (loop contract in cryo-harness docs/LOOPS.md)
+      options:
+        - "3 (fix loop — default)"
+        - "5 (QA loop)"
+      default: 0
+    validations:
+      required: true
+  - type: input
+    id: escalation
+    attributes:
+      label: Escalation condition
+      description: When to stop and label agent:needs-human
+      value: "Budget exhausted, or two consecutive iterations with the same failure signature"
+    validations:
+      required: true

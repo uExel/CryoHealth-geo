@@ -1,0 +1,24 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.30"
+      - run: uv python install 3.12
+      - run: uv sync --group dev
+      - name: Lint
+        run: uv run ruff check .
+      - name: Test
+        run: uv run pytest -v
+        # Live-network PoC (pipeline.poc) is intentionally not run in CI: it depends on
+        # an external service's real-time imagery availability, which CI shouldn't be
+        # coupled to. It's verified manually per ADR 0001 / docs/ai/PLAN.md.
