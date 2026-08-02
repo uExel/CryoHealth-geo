@@ -20,6 +20,7 @@ import math
 import os
 import time
 from dataclasses import dataclass
+from datetime import date
 
 import numpy as np
 import requests
@@ -79,11 +80,27 @@ class CdseSource:
         return self._token.value
 
     def find_recent_scenes(self, bbox: tuple[float, float, float, float], limit: int = 12) -> list[SceneRef]:
+        return self._search(bbox, max_items=limit)
+
+    def find_scenes_in_range(
+        self, bbox: tuple[float, float, float, float], start: date, end: date
+    ) -> list[SceneRef]:
+        """Every candidate in [start, end] — backfill wants a full time series, not
+        just the newest usable scene."""
+        return self._search(bbox, max_items=None, datetime_range=f"{start.isoformat()}/{end.isoformat()}")
+
+    def _search(
+        self,
+        bbox: tuple[float, float, float, float],
+        max_items: int | None,
+        datetime_range: str | None = None,
+    ) -> list[SceneRef]:
         search = self._stac.search(
             collections=[COLLECTION],
             bbox=bbox,
+            datetime=datetime_range,
             sortby=[{"field": "properties.datetime", "direction": "desc"}],
-            max_items=limit,
+            max_items=max_items,
             query={"eo:cloud_cover": {"lt": 80}},
         )
         # No per-band hrefs needed — Process API takes the scene's date, not asset URLs.

@@ -31,6 +31,10 @@ class SceneRef:
 class SceneSource(Protocol):
     def find_recent_scenes(self, bbox: tuple[float, float, float, float], limit: int) -> list[SceneRef]: ...
 
+    def find_scenes_in_range(
+        self, bbox: tuple[float, float, float, float], start: date, end: date
+    ) -> list[SceneRef]: ...
+
     def read_bands(
         self, scene: SceneRef, bands: list[str], bbox: tuple[float, float, float, float]
     ) -> dict[str, np.ndarray]: ...
@@ -53,11 +57,28 @@ class PlanetaryComputerSource:
         against Shishper). Returning several candidates lets the caller pick the first
         one that's actually usable *at the AOI*, which is what R2's staleness rule
         needs: check recent scenes until one works, not just the literal latest."""
+        return self._search(bbox, max_items=limit)
+
+    def find_scenes_in_range(
+        self, bbox: tuple[float, float, float, float], start: date, end: date
+    ) -> list[SceneRef]:
+        """Every candidate in [start, end], not just the newest usable one — backfill
+        wants a full time series, so every scene gets evaluated (and either written as
+        an observation or skipped for being too cloudy), not just the latest state."""
+        return self._search(bbox, max_items=None, datetime_range=f"{start.isoformat()}/{end.isoformat()}")
+
+    def _search(
+        self,
+        bbox: tuple[float, float, float, float],
+        max_items: int | None,
+        datetime_range: str | None = None,
+    ) -> list[SceneRef]:
         search = self._client.search(
             collections=[self.COLLECTION],
             bbox=bbox,
+            datetime=datetime_range,
             sortby=[{"field": "properties.datetime", "direction": "desc"}],
-            max_items=limit,
+            max_items=max_items,
             query={"eo:cloud_cover": {"lt": 80}},
         )
         return [
