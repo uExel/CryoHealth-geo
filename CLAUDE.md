@@ -1,6 +1,6 @@
 # CryoHealth-geo
 
-{{ONE_LINE_WHAT_THIS_REPO_IS_FOR — the purpose, not the stack; the stack is visible in the tree}}
+Sentinel-2 EO service: NDWI water-extent monitoring and hazard scoring for GLOF early warning. Owns geospatial computation only — NestJS (CryoHealth-api) owns product logic/policy; the two share one PostGIS database. PRD + architecture: uExel/cryo-harness and CryoHealth-api/ARCHITECTURE.md.
 
 ## Working here
 - Start sessions with /uexel:orient, end with /uexel:handoff. Pipeline:
@@ -11,13 +11,18 @@
 ## Map
 <!-- One line per top-level folder whose purpose a newcomer can't infer from its name.
      Delete rows that are obvious — every line here loads in every session. -->
-- {{DIR}} — {{WHY_IT_EXISTS}}
+- pipeline/ — NDWI/cloud-mask/area logic (ndwi.py, pure math, no I/O) and the scene
+  source abstraction (stac_source.py) that keeps STAC-catalog choice swappable
+- tests/ — run with `uv run pytest`
 
 ## Gotchas
-<!-- Only repo-wide traps that bite in ANY directory. Local conventions and test/lint
-     commands go in that directory's own CLAUDE.md. Date rules that exist to work around
-     a current limitation: "added YYYY-MM for <x> — re-evaluate on next model release". -->
-- {{GOTCHA}}
+- No CDSE (Copernicus Data Space Ecosystem) credentials exist in this project yet —
+  the PoC pipeline reads from Microsoft Planetary Computer's anonymous STAC API
+  instead. See docs/ai/decisions/0001-eo-platform.md before assuming CDSE is wired up.
+- Sentinel-2 COGs are in UTM, not lon/lat — bbox reprojection in stac_source.py is not
+  optional, dropping it silently reads the wrong window instead of erroring.
+- SCL (cloud mask) ships at 20m/pixel vs B03/B08's 10m — must be upsampled 2x before
+  use as a mask; see poc.py's `_upsample_scl_to_10m`.
 
 ## gstack (REQUIRED — global install)
 

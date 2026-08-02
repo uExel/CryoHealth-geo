@@ -1,1 +1,5 @@
 graphify-out/cost.json
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
