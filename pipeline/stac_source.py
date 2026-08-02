@@ -1,9 +1,8 @@
-"""Where scenes come from, kept behind one small interface for exactly one reason: this
-session has no Copernicus Data Space Ecosystem (CDSE) credentials and won't create an
-account to get them (see ADR 0001). Planetary Computer's STAC API is genuinely
-anonymous, so it's what proves the NDWI pipeline against real Sentinel-2 imagery today.
-Swapping in CDSE once real credentials exist means adding a CdseSource class here and
-changing one line in poc.py — not touching ndwi.py or lakes.py at all.
+"""Where scenes come from, kept behind one small interface. Every SceneSource.read_bands
+implementation returns bands already pixel-aligned on one grid — any resampling or
+windowing quirk a particular source needs is handled inside that source, never leaked
+to the caller. That contract is what let CdseSource (pipeline/cdse_source.py) get built
+later without poc.py needing to know which source has which quirks.
 """
 
 from __future__ import annotations
@@ -76,12 +75,23 @@ class PlanetaryComputerSource:
     ) -> dict[str, np.ndarray]:
         """bbox is WGS84 (lon/lat) — Sentinel-2 COGs are served in their native UTM
         zone, so it's reprojected per band before windowing. Getting this wrong doesn't
-        error, it silently reads the wrong window — worth the explicit comment."""
-        out: dict[str, np.ndarray] = {}
+        error, it silently reads the wrong window — worth the explicit comment.
+
+        SCL ships at 20m/pixel vs B03/B08's 10m, and independently-windowed bands at
+        different resolutions don't always come back exactly proportional in pixel
+        count either (confirmed live: B03 was one row taller than 2x SCL for a real
+        scene) — both handled here so callers never see misaligned arrays."""
+        raw: dict[str, np.ndarray] = {}
         for band in bands:
             href = scene.assets[band]
             with rasterio.open(href) as src:
                 utm_bbox = transform_bounds("EPSG:4326", src.crs, *bbox)
                 window = from_bounds(*utm_bbox, transform=src.transform)
-                out[band] = src.read(1, window=window)
-        return out
+                raw[band] = src.read(1, window=window)
+
+        if "SCL" in raw:
+            raw["SCL"] = np.repeat(np.repeat(raw["SCL"], 2, axis=0), 2, axis=1)
+
+        rows = min(a.shape[0] for a in raw.values())
+        cols = min(a.shape[1] for a in raw.values())
+        return {band: arr[:rows, :cols] for band, arr in raw.items()}

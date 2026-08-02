@@ -1,24 +1,30 @@
-# PLAN — CryoHealth-geo#3: Spike A, EO platform choice + PoC
-Goal: #1 (G1 milestone) · Task: #3 · Loop budget: 3 · Rollback: revert PR, no schema/DB touched
+# PLAN — CryoHealth-geo#6: wire CdseSource
+Goal: #1 (G1 milestone) · Task: #6 · Loop budget: 3 · Rollback: revert PR, no schema touched
 
-Scope note (decided before writing code, documented in ADR 0001): the DoD's "working
-proof on the chosen platform" assumes credentials this session doesn't have and won't
-create (no GEE/CDSE account creation). Proof instead validates the same NDWI pipeline
-against real Sentinel-2 imagery via Planetary Computer's anonymous STAC API — a
-different, zero-auth data source, with the scene-source behind an interface so swapping
-in CDSE later (once Shaan creates the free account) is additive, not a rewrite.
+Verified live before writing the class (curl, throwaway, not committed):
+- Token endpoint https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token,
+  client_credentials grant — works with the real client, confirmed
+- CDSE STAC search (stac.dataspace.copernicus.eu/v1/search) — unauthenticated, same
+  shape as Planetary Computer's, confirmed real Shishper-area results
+- Raw OData/S3 asset download needs a DIFFERENT audience the sh- client doesn't have
+  (confirmed: 401 "Token audience not allowed") — not the path
+- Sentinel Hub Process API (sh.dataspace.copernicus.eu/process/v1) IS the right path
+  for this client: POST an evalscript + bbox + date range, get back a GeoTIFF already
+  reprojected to EPSG:4326 and cropped to the exact AOI — confirmed with a real
+  B03/B08/SCL request over Shishper, valid raster returned
 
 Steps:
-1. ADR 0001: GEE vs CDSE comparison + decision (CDSE — transparent free quota vs GEE's
-   opaque commercial pricing and noncommercial-tier ineligibility for funded work)
-2. pipeline/ndwi.py: pure NDWI + cloud-mask + area math, tested with synthetic arrays
-   (no network) — verify: uv run pytest
-3. pipeline/lakes.py: the same 6 cited lakes as CryoHealth-api's seed (ported, not
-   re-derived, so the two services agree on where a lake is)
-4. pipeline/stac_source.py + poc.py: real STAC search + band read against Planetary
-   Computer, UTM reprojection (Sentinel-2 COGs aren't in lon/lat), SCL 20m->10m
-   alignment — verify: uv run python -m pipeline.poc --lake shishper produces a real
-   area value against live imagery
+1. pipeline/cdse_source.py: CdseSource(SceneSource) — find_recent_scenes via STAC
+   (mirrors PlanetaryComputerSource), read_bands via Process API (server-side
+   crop+reproject means no UTM/resolution-alignment code needed here at all)
+   — verify: uv run pytest (mocked HTTP)
+2. poc.py: --source {planetary-computer,cdse} flag, default unchanged (no
+   credentials required by default — cdse only activates when asked + configured)
+   — verify: uv run python -m pipeline.poc --lake shishper --source cdse against
+   real CDSE, live
+3. .env.example documenting CDSE_CLIENT_ID/CDSE_CLIENT_SECRET (no real values)
 
-GATE: scope decision (proof source != chosen production platform) stated up front in
-ADR 0001, not discovered mid-build or silently smoothed over.
+Assumptions: Process API's per-request evalscript output (fixed width/height, single
+CRS) is the production-shape read path — reusing it for a future scheduled job means
+the same class, not a rewrite. GATE: N/A, direct instruction + all endpoints
+verified live before code was written.

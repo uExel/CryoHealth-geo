@@ -48,8 +48,31 @@ have.
 STAC is a standard; Planetary Computer and CDSE both expose Sentinel-2 L2A through
 STAC-compliant catalogs with the same band-asset shape (`B03`, `B08`, `SCL`, etc.). The
 pipeline's scene-source is behind a small interface (`pipeline/stac_source.py`) for
-exactly this reason: swapping the catalog URL and adding CDSE's OAuth2 flow is the
-remaining step, not a rewrite. That swap is intentionally **not** done in this task —
-it needs the real account from the "action needed" line above.
+exactly this reason: swapping the catalog URL and adding CDSE's OAuth2 flow was the
+remaining step.
 
 **Run it:** `uv run python -m pipeline.poc --lake shishper`
+
+## Update — CDSE wired for production (task #6)
+
+Shaan created a CDSE account and OAuth2 client. `CdseSource`
+(`pipeline/cdse_source.py`) is now real, not planned:
+- Candidate discovery via CDSE's STAC API (`stac.dataspace.copernicus.eu`),
+  unauthenticated, same shape as `PlanetaryComputerSource`.
+- Band retrieval via the **Sentinel Hub Process API**
+  (`sh.dataspace.copernicus.eu/process/v1`), not the raw asset download — CDSE serves
+  Sentinel-2 bands as `s3://eodata/...` URIs needing separate S3 credentials the OAuth
+  client doesn't have (confirmed live: 401 `"Token audience not allowed"` against the
+  OData download endpoint). Process API instead computes the crop+reproject
+  server-side: request a bbox in EPSG:4326 at a fixed width/height, get back every
+  requested band already aligned on one pixel grid.
+
+That server-side crop is not just a convenience — it structurally eliminates the two
+bugs found in `PlanetaryComputerSource` (UTM reprojection, 10m/20m resolution
+misalignment) rather than needing the same fixes ported over.
+
+**Cross-validated live**: the same real scene (Shishper, 2026-07-20) gives 0.6291 km²
+via CDSE vs. 0.6258 km² via Planetary Computer — a 0.5% difference, consistent with two
+independent access paths computing the same underlying data. Both are correct.
+
+**Run it:** `CDSE_CLIENT_ID=... CDSE_CLIENT_SECRET=... uv run python -m pipeline.poc --lake shishper --source cdse`

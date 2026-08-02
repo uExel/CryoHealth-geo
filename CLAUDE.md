@@ -11,18 +11,23 @@ Sentinel-2 EO service: NDWI water-extent monitoring and hazard scoring for GLOF 
 ## Map
 <!-- One line per top-level folder whose purpose a newcomer can't infer from its name.
      Delete rows that are obvious — every line here loads in every session. -->
-- pipeline/ — NDWI/cloud-mask/area logic (ndwi.py, pure math, no I/O) and the scene
-  source abstraction (stac_source.py) that keeps STAC-catalog choice swappable
-- tests/ — run with `uv run pytest`
+- pipeline/ — NDWI/cloud-mask/area logic (ndwi.py, pure math, no I/O); scene sources
+  behind one interface (stac_source.py's SceneSource) — planetary-computer (default,
+  no credentials) and cdse (production, needs CDSE_CLIENT_ID/CDSE_CLIENT_SECRET)
+- tests/ — run with `uv run pytest`; CDSE tests are fully mocked, no live network/creds
 
 ## Gotchas
-- No CDSE (Copernicus Data Space Ecosystem) credentials exist in this project yet —
-  the PoC pipeline reads from Microsoft Planetary Computer's anonymous STAC API
-  instead. See docs/ai/decisions/0001-eo-platform.md before assuming CDSE is wired up.
-- Sentinel-2 COGs are in UTM, not lon/lat — bbox reprojection in stac_source.py is not
-  optional, dropping it silently reads the wrong window instead of erroring.
-- SCL (cloud mask) ships at 20m/pixel vs B03/B08's 10m — must be upsampled 2x before
-  use as a mask; see poc.py's `_upsample_scl_to_10m`.
+- Every SceneSource.read_bands must return bands already pixel-aligned on one grid —
+  that contract lives at the source, never leaked to poc.py. PlanetaryComputerSource
+  needs internal UTM reprojection + SCL 2x-upsample to honor it (Sentinel-2 COGs are
+  UTM, not lon/lat, and SCL ships at 20m vs B03/B08's 10m); CdseSource gets this for
+  free since Process API crops+reprojects server-side.
+- CDSE bands are NOT reachable via the STAC item's raw `s3://eodata/...` href with just
+  an OAuth2 client_credentials token — confirmed live, 401 "Token audience not
+  allowed" (that needs separate S3 credentials). Use the Sentinel Hub Process API
+  instead (see cdse_source.py + ADR 0001's update).
+- CDSE credentials are env vars only (CDSE_CLIENT_ID/CDSE_CLIENT_SECRET via .env,
+  gitignored) — never hardcode, never commit real values, .env.example has the shape.
 
 ## gstack (REQUIRED — global install)
 
