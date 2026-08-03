@@ -49,17 +49,13 @@
   "extraKnownMarketplaces": [
     {
       "source": "github",
-      "repo": "uExel/cryo-harness"
+      "repo": "uExel/uxl-harness"
     }
   ],
   "enabledPlugins": [
     {
-      "marketplace": "cryo-harness",
+      "marketplace": "uxl-harness",
       "plugin": "uexel"
-    },
-    {
-      "marketplace": "claude-plugins-official",
-      "plugin": "typescript-lsp"
     }
   ]
 }

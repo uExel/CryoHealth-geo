@@ -9,36 +9,20 @@ Sentinel-2 EO service: NDWI water-extent monitoring and hazard scoring for GLOF 
 - Shared AI working files: docs/ai/ (PLAN, TODO, HANDOFF, LEARNINGS, sessions, decisions).
 
 ## Map
-<!-- One line per top-level folder whose purpose a newcomer can't infer from its name.
-     Delete rows that are obvious — every line here loads in every session. -->
-- pipeline/ — NDWI/cloud-mask/area logic (ndwi.py, pure math, no I/O); scene sources
-  behind one interface (stac_source.py's SceneSource) — planetary-computer (default,
-  no credentials) and cdse (production, needs CDSE_CLIENT_ID/CDSE_CLIENT_SECRET).
-  hazard.py (pure math, weights/thresholds in docs/HAZARD_METHODOLOGY.md) computes the
-  composite score; dem.py (GLO-30 slope) and exposure.py (WorldPop population) feed it;
-  hazard_client.py reports to CryoHealth-api's /alerts/hazard-scores (needs
-  CRYOHEALTH_API_KEY, matching that repo's GEO_SERVICE_API_KEY).
-- tests/ — run with `uv run pytest`; CDSE/exposure/hazard_client tests are fully mocked,
-  no live network/creds
-- docs/HAZARD_METHODOLOGY.md — the hazard index's weights, thresholds, normalization;
-  kept in lockstep with pipeline/hazard.py (same METHODOLOGY_VERSION)
+- pipeline/ — ndwi.py (pure math); scene sources behind SceneSource (stac_source.py:
+  planetary-computer default, cdse production); hazard.py (pure math, see
+  docs/HAZARD_METHODOLOGY.md) + dem.py/exposure.py feed it; hazard_client.py reports to
+  CryoHealth-api (needs CRYOHEALTH_API_KEY = that repo's GEO_SERVICE_API_KEY)
+- tests/ — `uv run pytest`; network-touching modules are fully mocked
+- docs/HAZARD_METHODOLOGY.md — weights/thresholds, kept in lockstep with hazard.py
 
 ## Gotchas
-- Every SceneSource.read_bands must return bands already pixel-aligned on one grid —
-  that contract lives at the source, never leaked to poc.py. PlanetaryComputerSource
-  needs internal UTM reprojection + SCL 2x-upsample to honor it (Sentinel-2 COGs are
-  UTM, not lon/lat, and SCL ships at 20m vs B03/B08's 10m); CdseSource gets this for
-  free since Process API crops+reprojects server-side.
-- CDSE bands are NOT reachable via the STAC item's raw `s3://eodata/...` href with just
-  an OAuth2 client_credentials token — confirmed live, 401 "Token audience not
-  allowed" (that needs separate S3 credentials). Use the Sentinel Hub Process API
-  instead (see cdse_source.py + ADR 0001's update).
-- CDSE credentials are env vars only (CDSE_CLIENT_ID/CDSE_CLIENT_SECRET via .env,
-  gitignored) — never hardcode, never commit real values, .env.example has the shape.
-- WorldPop's server advertises `Accept-Ranges: bytes` but ignores actual Range headers
-  and always returns the full ~140MB national raster (confirmed live) — exposure.py
-  downloads it once to .cache/worldpop/ (gitignored) rather than attempting a windowed
-  remote read.
+- Every SceneSource.read_bands returns pre-aligned bands (UTM reprojection + SCL
+  2x-upsample handled per-source, never leaked to callers)
+- CDSE bands need the Sentinel Hub Process API, not raw `s3://eodata/...` (401 live —
+  needs separate S3 creds). Credentials are env-only, gitignored .env
+- WorldPop's server ignores Range headers despite advertising support — exposure.py
+  downloads the ~140MB raster once to .cache/worldpop/ (gitignored)
 
 ## gstack (REQUIRED — global install)
 
