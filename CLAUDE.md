@@ -13,8 +13,15 @@ Sentinel-2 EO service: NDWI water-extent monitoring and hazard scoring for GLOF 
      Delete rows that are obvious — every line here loads in every session. -->
 - pipeline/ — NDWI/cloud-mask/area logic (ndwi.py, pure math, no I/O); scene sources
   behind one interface (stac_source.py's SceneSource) — planetary-computer (default,
-  no credentials) and cdse (production, needs CDSE_CLIENT_ID/CDSE_CLIENT_SECRET)
-- tests/ — run with `uv run pytest`; CDSE tests are fully mocked, no live network/creds
+  no credentials) and cdse (production, needs CDSE_CLIENT_ID/CDSE_CLIENT_SECRET).
+  hazard.py (pure math, weights/thresholds in docs/HAZARD_METHODOLOGY.md) computes the
+  composite score; dem.py (GLO-30 slope) and exposure.py (WorldPop population) feed it;
+  hazard_client.py reports to CryoHealth-api's /alerts/hazard-scores (needs
+  CRYOHEALTH_API_KEY, matching that repo's GEO_SERVICE_API_KEY).
+- tests/ — run with `uv run pytest`; CDSE/exposure/hazard_client tests are fully mocked,
+  no live network/creds
+- docs/HAZARD_METHODOLOGY.md — the hazard index's weights, thresholds, normalization;
+  kept in lockstep with pipeline/hazard.py (same METHODOLOGY_VERSION)
 
 ## Gotchas
 - Every SceneSource.read_bands must return bands already pixel-aligned on one grid —
@@ -28,6 +35,10 @@ Sentinel-2 EO service: NDWI water-extent monitoring and hazard scoring for GLOF 
   instead (see cdse_source.py + ADR 0001's update).
 - CDSE credentials are env vars only (CDSE_CLIENT_ID/CDSE_CLIENT_SECRET via .env,
   gitignored) — never hardcode, never commit real values, .env.example has the shape.
+- WorldPop's server advertises `Accept-Ranges: bytes` but ignores actual Range headers
+  and always returns the full ~140MB national raster (confirmed live) — exposure.py
+  downloads it once to .cache/worldpop/ (gitignored) rather than attempting a windowed
+  remote read.
 
 ## gstack (REQUIRED — global install)
 
