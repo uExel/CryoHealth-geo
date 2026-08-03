@@ -125,3 +125,6 @@ fixed in the process (see above).
 
 ## Resume with
 /uexel:orient — task #11 ready for PR once reviewed.
+
+## Addendum — 2026-08-03 (harness maintenance)
+cryo-harness renamed to uxl-harness across the org (github.com/uExel/uxl-harness); this repo's .claude/settings.json marketplace pointer updated to match.
