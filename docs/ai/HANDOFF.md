@@ -9,11 +9,10 @@ container stable (no crash loop). CD pipeline (`deploy.yml`, workflow_run on gre
 confirmed working end-to-end (`deploy #3`). GHCR pull auth fixed (user supplied a
 `read:packages` PAT, `docker login`'d as `deploy` on the server). One real bug caught and
 fixed on first actual container run — see Done this session.
-**`CDSE_CLIENT_ID`/`CDSE_CLIENT_SECRET` on the server are still `REPLACE_ME`
-placeholders** — the daily job will run (container is up, no auth is on `/run`/`/run-hazard`
-so it'll boot fine) but will fall back to Planetary Computer rather than the real
-Copernicus production source until real credentials are provided. No public/tunnel route
-exists for this service — it has no inbound surface, only outbound calls.
+Real `CDSE_CLIENT_ID`/`CDSE_CLIENT_SECRET` were supplied and put in the server's `.env`,
+`geo` restarted to pick them up — confirmed via logs (no "CDSE_CLIENT_ID not set —
+falling back to Planetary Computer" warning on this boot, unlike earlier). No public/
+tunnel route exists for this service — it has no inbound surface, only outbound calls.
 
 ## Done this session
 
@@ -31,25 +30,20 @@ rasterio` succeeds) before pushing (af566f8)
 
 ## Not done / deferred
 
-- Real Copernicus CDSE credentials not yet provided — service falls back to Planetary
-  Computer (non-production source per service.py's own documented behavior) until they
-  are. See docker-compose.prod.yml / cryohealth-infra/README.md for where to put them.
 - No live verification yet that the daily observation+hazard job actually completes a
-  full pass against production data (container is up and would run on its own schedule,
-  but no one has watched a full cycle complete since this deploy)
+  full pass against production data with the real CDSE source (container is up and would
+  run on its own schedule, but no one has watched a full cycle complete since the real
+  credentials were wired in)
 
 ## Next action
 
-Once real CDSE credentials are available: put them in `/opt/cryohealth/.env` on the
-server (see cryohealth-infra/README.md), then `docker compose -f
-docker-compose.prod.yml up -d geo` to restart with the real source. Otherwise: watch the
-next scheduled daily run (or `POST /run` manually against the container, private network
-only) to confirm output end to end against production infra for the first time.
+Watch the next scheduled daily run (or `POST /run` manually against the container,
+private network only) to confirm a full observation+hazard pass completes end to end
+against the real Copernicus source, not just that the container boots.
 
 ## Open questions for a human
 
-- Real Copernicus CDSE credentials for production Sentinel-2 — blocking: no for now (geo
-  runs fine on the fallback source), yes for genuinely production-quality hazard data
+- none blocking
 
 ## Failed approaches (do not retry)
 
@@ -75,8 +69,8 @@ Dockerfile (new), .dockerignore (new), .github/workflows/deploy.yml (new)
 ## Verification status
 
 tests: unaffected (no code changes, only packaging/CD) deploy: **live** — container
-running stably on the server, no crash loop; production Sentinel-2 source not yet
-confirmed live end-to-end (see Not done)
+running stably on the server with real CDSE credentials; a full observation+hazard pass
+against production data not yet watched end-to-end (see Not done)
 
 ## Resume with
 
