@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from uuid import uuid4
 
 import psycopg
@@ -22,6 +22,12 @@ from pipeline.hazard_client import report_hazard_score
 from pipeline.lakes import LAKES
 
 logger = logging.getLogger(__name__)
+
+# Covers all signals used in hazard.py:
+#   90-day growth window + 15-day tolerance  = ~105 days
+#   Seasonal anomaly needs one prior calendar-year month = ~395 days
+#   Safety margin -> 548 days total (≈18 months)
+OBSERVATION_LOOKBACK_DAYS = 548
 
 
 @dataclass
@@ -45,15 +51,22 @@ def _lake_static_inputs(conn: psycopg.Connection, lake_id: str) -> LakeStaticInp
     return LakeStaticInputs(dam_type=row[0], glacier_contact=row[1], historical_glof=row[2])
 
 
-def _observations(conn: psycopg.Connection, lake_id: str) -> list[tuple[date, float]]:
+def _observations(conn: psycopg.Connection, lake_id: str, as_of: date) -> list[tuple[date, float]]:
     # ORDER BY matters: hazard.py's tie-breaking (equidistant candidate dates on either
     # side of a target) depends on iteration order via min()/max() — an unordered query
     # made that non-deterministic and, confirmed live, could land on a noisy outlier
     # reading over its more representative same-distance neighbor.
+    #
+    # Cutoff is anchored to as_of (not date.today()) so historical/backfill runs
+    # (e.g. run_hazard_pass(as_of=date(2024, 1, 1))) look back from the correct point.
+    cutoff = as_of - timedelta(days=OBSERVATION_LOOKBACK_DAYS)
     with conn.cursor() as cur:
         cur.execute(
-            """SELECT "capturedAt", "areaKm2" FROM observations WHERE "lakeId" = %s ORDER BY "capturedAt" """,
-            (lake_id,),
+            """SELECT "capturedAt", "areaKm2"
+               FROM observations
+               WHERE "lakeId" = %s AND "capturedAt" >= %s
+               ORDER BY "capturedAt" """,
+            (lake_id, cutoff),
         )
         return [(row[0].date(), float(row[1])) for row in cur.fetchall()]
 
@@ -78,7 +91,7 @@ def run_hazard_pass(lake_slugs: list[str] | None = None, as_of: date | None = No
                         error="lake row found but static fields (damType/glacierContact/historicalGlof) are NULL"))
                     continue
 
-                observations = _observations(conn, lake_id)
+                observations = _observations(conn, lake_id, as_of)
                 slope = mean_slope_degrees(lake.bbox())
                 exposure = population_within_buffer(lake.lon, lake.lat)
 

@@ -11,8 +11,11 @@ what's in the database alone (PRD §9 R3), without needing this file's source at
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import date, timedelta
+
+logger = logging.getLogger(__name__)
 
 METHODOLOGY_VERSION = "1.0"
 
@@ -44,6 +47,24 @@ TIER_THRESHOLDS: list[tuple[float, str]] = [
 ]
 
 DAM_TYPE_RISK: dict[str, float] = {"moraine": 1.0, "ice": 0.8, "unknown": 0.5, "bedrock": 0.2}
+
+# All valid dam type values — anything else is a data quality issue and will be logged.
+KNOWN_DAM_TYPES: frozenset[str] = frozenset(DAM_TYPE_RISK)
+
+
+def _dam_type_risk(dam_type: str) -> float:
+    """Returns the risk value for dam_type, logging a WARNING if it is not a known
+    type so data quality problems (e.g. capitalisation typos) surface in logs rather
+    than disappearing silently into the 'unknown' fallback."""
+    if dam_type not in KNOWN_DAM_TYPES:
+        logger.warning(
+            "Unrecognised damType=%r — scoring as 'unknown' (%.1f). "
+            "Known types: %s",
+            dam_type,
+            DAM_TYPE_RISK["unknown"],
+            sorted(KNOWN_DAM_TYPES),
+        )
+    return DAM_TYPE_RISK.get(dam_type, DAM_TYPE_RISK["unknown"])
 
 # Growth of this fraction (50%) or more over the window is treated as maximum risk for
 # that component; growth is clamped to [0, GROWTH_SATURATION] before normalizing to
@@ -150,7 +171,7 @@ def compute_hazard_score(
         "seasonal_anomaly": _clamp01(
             (max(anomaly, 0.0) if anomaly is not None else 0.0) / SEASONAL_SATURATION
         ),
-        "dam_type": DAM_TYPE_RISK.get(static.dam_type, DAM_TYPE_RISK["unknown"]),
+        "dam_type": _dam_type_risk(static.dam_type),
         "glacier_contact": 1.0 if static.glacier_contact else 0.3,
         "slope": _clamp01(slope_deg / 40.0),
         "historical_glof": 1.0 if static.historical_glof else 0.0,
