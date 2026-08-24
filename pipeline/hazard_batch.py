@@ -72,48 +72,90 @@ def _observations(conn: psycopg.Connection, lake_id: str, as_of: date) -> list[t
         return [(row[0].date(), float(row[1])) for row in cur.fetchall()]
 
 
+def _read_db_inputs(
+    conn: psycopg.Connection,
+    slugs: list[str],
+    as_of: date,
+) -> dict[str, tuple | None]:
+    """Phase 1: read every lake's DB data into memory and return it.
+
+    Returns slug -> (lake_id, static, observations) on success,
+    or slug -> None when the lake is missing / has NULL static fields.
+
+    Keeping all DB reads here means the connection is released before any
+    slow HTTP work (DEM tile fetch, WorldPop raster download, API POST)
+    begins in Phase 2, preventing idle-connection timeouts.
+    """
+    db_inputs: dict[str, tuple | None] = {}
+    for slug in slugs:
+        lake_id = lake_id_for_slug(conn, slug)
+        if lake_id is None:
+            logger.warning("slug %r not found in DB — skipping", slug)
+            db_inputs[slug] = None
+            continue
+
+        static = _lake_static_inputs(conn, lake_id)
+        if static is None:
+            logger.warning(
+                "slug %r (lake_id=%s) has NULL static fields — skipping", slug, lake_id
+            )
+            db_inputs[slug] = None
+            continue
+
+        observations = _observations(conn, lake_id, as_of)
+        db_inputs[slug] = (lake_id, static, observations)
+
+    return db_inputs
+
+
 def run_hazard_pass(lake_slugs: list[str] | None = None, as_of: date | None = None) -> list[HazardRunResult]:
     as_of = as_of or date.today()
     run_id = f"hazard-{uuid4()}"
+    slugs = lake_slugs or list(LAKES)
     results: list[HazardRunResult] = []
 
+    # Phase 1: DB reads — connection opened and closed here. -----------------
+    # All lake data is loaded into memory before any network I/O begins so
+    # slow HTTP calls (DEM, WorldPop, API POST) never hold a live Postgres
+    # connection open. Idle-connection timeouts on the first WorldPop run
+    # (~140 MB raster download) were the original motivation for this split.
     with connect() as conn:
-        for slug in lake_slugs or list(LAKES):
-            lake = LAKES[slug]
-            try:
-                lake_id = lake_id_for_slug(conn, slug)
-                if lake_id is None:
-                    results.append(HazardRunResult(slug, error="lake not seeded in DB"))
-                    continue
+        db_inputs = _read_db_inputs(conn, slugs, as_of)
+    # DB connection is CLOSED here — everything below is pure compute + HTTP.
 
-                static = _lake_static_inputs(conn, lake_id)
-                if static is None:
-                    results.append(HazardRunResult(slug,
-                        error="lake row found but static fields (damType/glacierContact/historicalGlof) are NULL"))
-                    continue
+    # Phase 2: compute scores + report — no open DB connection. ---------------
+    for slug, data in db_inputs.items():
+        lake = LAKES[slug]
+        try:
+            if data is None:
+                # Detailed reason already logged by _read_db_inputs above.
+                results.append(HazardRunResult(slug,
+                    error="lake row found but static fields (damType/glacierContact/historicalGlof) are NULL"))
+                continue
 
-                observations = _observations(conn, lake_id, as_of)
-                slope = mean_slope_degrees(lake.bbox())
-                exposure = population_within_buffer(lake.lon, lake.lat)
+            lake_id, static, observations = data
+            slope = mean_slope_degrees(lake.bbox())
+            exposure = population_within_buffer(lake.lon, lake.lat)
 
-                result = compute_hazard_score(observations, static, slope, as_of, exposure)
-                response = report_hazard_score(
-                    str(lake_id), run_id, result.score, result.tier, result.components
+            result = compute_hazard_score(observations, static, slope, as_of, exposure)
+            response = report_hazard_score(
+                str(lake_id), run_id, result.score, result.tier, result.components
+            )
+            results.append(
+                HazardRunResult(
+                    slug,
+                    score=result.score,
+                    tier=result.tier,
+                    alert_created=response.get("alert") is not None,
+                    computed_at=datetime.now(timezone.utc).isoformat(),
                 )
-                results.append(
-                    HazardRunResult(
-                        slug,
-                        score=result.score,
-                        tier=result.tier,
-                        alert_created=response.get("alert") is not None,
-                        computed_at=datetime.now(timezone.utc).isoformat(),
-                    )
-                )
-            except Exception as exc:  # noqa: BLE001 — one lake's failure must not sink the pass
-                logger.exception("run_hazard_pass failed for %s", slug)
-                results.append(HazardRunResult(slug, error=str(exc)))
+            )
+        except Exception as exc:  # noqa: BLE001 — one lake's failure must not sink the pass
+            logger.exception("run_hazard_pass failed for %s", slug)
+            results.append(HazardRunResult(slug, error=str(exc)))
 
     return results
 
 
 __all__ = ["HazardRunResult", "run_hazard_pass"]
+
