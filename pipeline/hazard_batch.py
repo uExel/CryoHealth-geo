@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from uuid import uuid4
 
 import psycopg
@@ -37,6 +37,7 @@ class HazardRunResult:
     tier: str | None = None
     alert_created: bool = False
     error: str | None = None
+    computed_at: str = ""  # ISO 8601 UTC; non-empty only on success
 
 
 def _lake_static_inputs(conn: psycopg.Connection, lake_id: str) -> LakeStaticInputs | None:
@@ -105,6 +106,7 @@ def run_hazard_pass(lake_slugs: list[str] | None = None, as_of: date | None = No
                         score=result.score,
                         tier=result.tier,
                         alert_created=response.get("alert") is not None,
+                        computed_at=datetime.now(timezone.utc).isoformat(),
                     )
                 )
             except Exception as exc:  # noqa: BLE001 — one lake's failure must not sink the pass
