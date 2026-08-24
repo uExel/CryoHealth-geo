@@ -4,7 +4,7 @@ flow, no real DB/network/DEM/WorldPop involved."""
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import date
 from unittest.mock import patch
 
@@ -38,7 +38,9 @@ def _patched(
         {"side_effect": report_side_effect} if report_side_effect else {"return_value": report_response}
     )
 
-    return (
+    # Return a plain list — callers use _run_with_patchers() rather than
+    # indexing into this list directly, so order changes here are safe.
+    return [
         patch("pipeline.hazard_batch.connect", _fake_connect),
         patch(
             "pipeline.hazard_batch.lake_id_for_slug",
@@ -49,23 +51,41 @@ def _patched(
         patch("pipeline.hazard_batch.mean_slope_degrees", return_value=slope),
         patch("pipeline.hazard_batch.population_within_buffer", return_value=exposure),
         patch("pipeline.hazard_batch.report_hazard_score", **report_kwargs),
-    )
+    ]
+
+
+def _run_with_patchers(patchers, **kwargs):
+    """Enter all patchers via ExitStack, run run_hazard_pass, return (results, mocks).
+
+    Using ExitStack means adding or removing a patcher in _patched() never
+    requires updating every test's 'with' line — a silent off-by-one with
+    the old tuple-index approach caused the static-inputs test to skip
+    patcher[6] entirely.
+    """
+    with ExitStack() as stack:
+        mocks = [stack.enter_context(p) for p in patchers]
+        results = run_hazard_pass(**kwargs)
+    return results, mocks
 
 
 def test_run_hazard_pass_reports_error_when_lake_not_seeded():
     patchers = _patched({})
-    with patchers[0], patchers[1]:
-        results = run_hazard_pass(lake_slugs=["shishper"])
+    results, _ = _run_with_patchers(patchers, lake_slugs=["shishper"])
 
-    assert results == [HazardRunResult("shishper", error="lake not seeded in DB")]
+    assert len(results) == 1
+    assert results[0].slug == "shishper"
+    assert results[0].error == "lake not seeded in DB"
+    assert results[0].computed_at == ""
 
 
 def test_run_hazard_pass_reports_error_when_static_inputs_missing():
     patchers = _patched({"shishper": "lake-1"}, static=None)
-    with patchers[0], patchers[1], patchers[2], patchers[3], patchers[4], patchers[5]:
-        results = run_hazard_pass(lake_slugs=["shishper"])
+    results, _ = _run_with_patchers(patchers, lake_slugs=["shishper"])
 
-    assert results[0].error == "lake not seeded in DB"
+    assert len(results) == 1
+    assert "static fields" in results[0].error
+    assert "NULL" in results[0].error
+    assert results[0].computed_at == ""
 
 
 def test_run_hazard_pass_computes_and_reports_a_score(monkeypatch):
@@ -74,9 +94,10 @@ def test_run_hazard_pass_computes_and_reports_a_score(monkeypatch):
         {"shishper": "lake-1"},
         report_response={"alert": {"id": "alert-1"}},
     )
-    p0, p1, p2, p3, p4, p5, p6 = patchers
-    with p0, p1, p2, p3, p4, p5, p6 as mock_report:
-        results = run_hazard_pass(lake_slugs=["shishper"], as_of=date(2026, 7, 1))
+    results, mocks = _run_with_patchers(
+        patchers, lake_slugs=["shishper"], as_of=date(2026, 7, 1)
+    )
+    mock_report = mocks[-1]  # report_hazard_score is always the last patcher
 
     assert len(results) == 1
     result = results[0]
@@ -85,6 +106,7 @@ def test_run_hazard_pass_computes_and_reports_a_score(monkeypatch):
     assert result.score is not None
     assert result.tier is not None
     assert result.alert_created is True
+    assert result.computed_at != ""  # timestamp populated on success
     mock_report.assert_called_once()
     call_kwargs = mock_report.call_args
     assert call_kwargs.args[0] == "lake-1"  # lake_id
@@ -92,16 +114,16 @@ def test_run_hazard_pass_computes_and_reports_a_score(monkeypatch):
 
 def test_run_hazard_pass_alert_created_is_false_when_no_alert_in_response():
     patchers = _patched({"shishper": "lake-1"}, report_response={"alert": None})
-    with patchers[0], patchers[1], patchers[2], patchers[3], patchers[4], patchers[5], patchers[6]:
-        results = run_hazard_pass(lake_slugs=["shishper"])
+    results, _ = _run_with_patchers(patchers, lake_slugs=["shishper"])
 
     assert results[0].alert_created is False
+    assert results[0].computed_at != ""  # still a successful run
 
 
 def test_run_hazard_pass_captures_exceptions_per_lake_without_sinking_the_pass():
     patchers = _patched({"shishper": "lake-1"}, report_side_effect=RuntimeError("API unreachable"))
-    with patchers[0], patchers[1], patchers[2], patchers[3], patchers[4], patchers[5], patchers[6]:
-        results = run_hazard_pass(lake_slugs=["shishper"])
+    results, _ = _run_with_patchers(patchers, lake_slugs=["shishper"])
 
     assert results[0].error == "API unreachable"
     assert results[0].score is None
+    assert results[0].computed_at == ""  # error run — no timestamp
