@@ -76,22 +76,22 @@ def _read_db_inputs(
     conn: psycopg.Connection,
     slugs: list[str],
     as_of: date,
-) -> dict[str, tuple | None]:
+) -> dict[str, tuple[str, LakeStaticInputs, list[tuple[date, float]]] | str]:
     """Phase 1: read every lake's DB data into memory and return it.
 
     Returns slug -> (lake_id, static, observations) on success,
-    or slug -> None when the lake is missing / has NULL static fields.
+    or slug -> error_message (str) when the lake is missing or invalid.
 
     Keeping all DB reads here means the connection is released before any
     slow HTTP work (DEM tile fetch, WorldPop raster download, API POST)
     begins in Phase 2, preventing idle-connection timeouts.
     """
-    db_inputs: dict[str, tuple | None] = {}
+    db_inputs: dict[str, tuple[str, LakeStaticInputs, list[tuple[date, float]]] | str] = {}
     for slug in slugs:
         lake_id = lake_id_for_slug(conn, slug)
         if lake_id is None:
             logger.warning("slug %r not found in DB — skipping", slug)
-            db_inputs[slug] = None
+            db_inputs[slug] = "lake not seeded in DB"
             continue
 
         static = _lake_static_inputs(conn, lake_id)
@@ -99,7 +99,9 @@ def _read_db_inputs(
             logger.warning(
                 "slug %r (lake_id=%s) has NULL static fields — skipping", slug, lake_id
             )
-            db_inputs[slug] = None
+            db_inputs[slug] = (
+                "lake row found but static fields (damType/glacierContact/historicalGlof) are NULL"
+            )
             continue
 
         observations = _observations(conn, lake_id, as_of)
@@ -127,10 +129,8 @@ def run_hazard_pass(lake_slugs: list[str] | None = None, as_of: date | None = No
     for slug, data in db_inputs.items():
         lake = LAKES[slug]
         try:
-            if data is None:
-                # Detailed reason already logged by _read_db_inputs above.
-                results.append(HazardRunResult(slug,
-                    error="lake row found but static fields (damType/glacierContact/historicalGlof) are NULL"))
+            if isinstance(data, str):
+                results.append(HazardRunResult(slug, error=data))
                 continue
 
             lake_id, static, observations = data
