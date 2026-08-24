@@ -74,7 +74,8 @@ def run_hazard_pass(lake_slugs: list[str] | None = None, as_of: date | None = No
 
                 static = _lake_static_inputs(conn, lake_id)
                 if static is None:
-                    results.append(HazardRunResult(slug, error="lake not seeded in DB"))
+                    results.append(HazardRunResult(slug,
+                        error="lake row found but static fields (damType/glacierContact/historicalGlof) are NULL"))
                     continue
 
                 observations = _observations(conn, lake_id)
