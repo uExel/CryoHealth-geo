@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from uuid import uuid4
 
 import psycopg
@@ -20,6 +20,7 @@ from pipeline.exposure import population_within_buffer
 from pipeline.hazard import LakeStaticInputs, compute_hazard_score
 from pipeline.hazard_client import report_hazard_score
 from pipeline.lakes import LAKES
+from pipeline.meteo import MeteoInputs, MeteoUnavailableError, fetch_meteo_inputs
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +138,17 @@ def run_hazard_pass(lake_slugs: list[str] | None = None, as_of: date | None = No
             slope = mean_slope_degrees(lake.bbox())
             exposure = population_within_buffer(lake.lon, lake.lat)
 
-            result = compute_hazard_score(observations, static, slope, as_of, exposure)
+            meteo: MeteoInputs | None = None
+            try:
+                meteo = fetch_meteo_inputs(lake.lat, lake.lon, as_of)
+            except MeteoUnavailableError:
+                logger.warning(
+                    "Weather API unavailable for %s — thermal component will be 0.0", slug
+                )
+
+            result = compute_hazard_score(
+                observations, static, slope, as_of, exposure, meteo=meteo
+            )
             response = report_hazard_score(
                 str(lake_id), run_id, result.score, result.tier, result.components
             )
@@ -147,7 +158,7 @@ def run_hazard_pass(lake_slugs: list[str] | None = None, as_of: date | None = No
                     score=result.score,
                     tier=result.tier,
                     alert_created=response.get("alert") is not None,
-                    computed_at=datetime.now(timezone.utc).isoformat(),
+                    computed_at=datetime.now(UTC).isoformat(),
                 )
             )
         except Exception as exc:  # noqa: BLE001 — one lake's failure must not sink the pass

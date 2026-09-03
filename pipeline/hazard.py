@@ -15,23 +15,23 @@ import logging
 from dataclasses import dataclass
 from datetime import date, timedelta
 
+from pipeline.meteo import MeteoInputs
+
 logger = logging.getLogger(__name__)
 
-METHODOLOGY_VERSION = "1.0"
+METHODOLOGY_VERSION = "1.1"
 
-# Must sum to 1.0 — enforced below. Area growth carries the most weight because it's the
-# most direct precursor signal (PRD §8); historical GLOF record and dam type are the next
-# strongest static predictors of failure. Slope and glacier contact are real but weaker
-# standalone signals for THIS composite (they matter more for downstream energy/exposure
-# than for triggering probability), seasonal anomaly is the weakest/noisiest signal, and
-# is explicitly redundant with area growth to some extent (both are demoted accordingly).
+# Must sum to 1.0 — enforced below. Proportional trimming from v1.0 (all 6 original
+# weights scaled by 0.90) makes room for the 0.10 thermal melting component (Issue #16),
+# preserving the relative ordering of all existing risk signals.
 WEIGHTS: dict[str, float] = {
-    "area_growth": 0.30,
-    "historical_glof": 0.15,
-    "dam_type": 0.20,
-    "glacier_contact": 0.10,
-    "slope": 0.10,
-    "seasonal_anomaly": 0.15,
+    "area_growth": 0.27,
+    "historical_glof": 0.135,
+    "dam_type": 0.18,
+    "glacier_contact": 0.09,
+    "slope": 0.09,
+    "seasonal_anomaly": 0.135,
+    "thermal": 0.10,
 }
 assert abs(sum(WEIGHTS.values()) - 1.0) < 1e-9, "WEIGHTS must sum to 1.0"
 
@@ -77,9 +77,48 @@ GROWTH_SATURATION = 0.5
 SEASONAL_SATURATION = 0.3
 OBSERVATION_TOLERANCE_DAYS = 15
 
+# Saturation thresholds for thermal melting risk (Issue #16).
+# 3-day max-temp anomaly: +4°C above 14-year ERA5 seasonal mean reaches maximum risk.
+T_SAT = 4.0
+# 14-day cumulative rainfall: 80 mm (heavy monsoon convective rainfall) saturates risk.
+P_SAT = 80.0
+# 0°C isotherm: altitudes from 3500 m (valley glaciers) to 5500 m (glacier accumulation zones).
+FL_BASE = 3500.0
+FL_SAT = 5500.0
+
+THERMAL_SUB_WEIGHTS: dict[str, float] = {
+    "temp_anomaly": 0.5,
+    "precip": 0.3,
+    "freezing_level": 0.2,
+}
+assert abs(sum(THERMAL_SUB_WEIGHTS.values()) - 1.0) < 1e-9, "THERMAL_SUB_WEIGHTS must sum to 1.0"
+
 
 def _clamp01(x: float) -> float:
     return max(0.0, min(1.0, x))
+
+
+def thermal_risk(meteo: MeteoInputs | None) -> float:
+    """Normalized thermal melting risk in [0, 1].
+
+    Combines 3-day temperature anomaly, 14-day cumulative rainfall,
+    and 0°C isotherm altitude.
+
+    Returns 0.0 if meteo is None (graceful degradation — missing weather
+    contributes zero risk, never fabricates or fails).
+    """
+    if meteo is None:
+        return 0.0
+
+    t_risk = _clamp01(max(meteo.max_temp_anomaly_3d_c, 0.0) / T_SAT)
+    p_risk = _clamp01(max(meteo.precip_14d_mm, 0.0) / P_SAT)
+    fl_risk = _clamp01((meteo.freezing_level_m - FL_BASE) / (FL_SAT - FL_BASE))
+
+    return _clamp01(
+        THERMAL_SUB_WEIGHTS["temp_anomaly"] * t_risk
+        + THERMAL_SUB_WEIGHTS["precip"] * p_risk
+        + THERMAL_SUB_WEIGHTS["freezing_level"] * fl_risk
+    )
 
 
 def _latest_on_or_before(observations: list[tuple[date, float]], as_of: date) -> tuple[date, float] | None:
@@ -155,6 +194,7 @@ def compute_hazard_score(
     slope_deg: float,
     as_of: date,
     exposure: dict | None = None,
+    meteo: MeteoInputs | None = None,
 ) -> HazardResult:
     growth_30d = growth_rate(observations, as_of, 30)
     growth_90d = growth_rate(observations, as_of, 90)
@@ -175,6 +215,7 @@ def compute_hazard_score(
         "glacier_contact": 1.0 if static.glacier_contact else 0.3,
         "slope": _clamp01(slope_deg / 40.0),
         "historical_glof": 1.0 if static.historical_glof else 0.0,
+        "thermal": thermal_risk(meteo),
     }
     score = sum(WEIGHTS[k] * risks[k] for k in WEIGHTS)
     tier = tier_for_score(score)
@@ -192,6 +233,15 @@ def compute_hazard_score(
             "glacier_contact": static.glacier_contact,
             "slope_deg": slope_deg,
             "historical_glof": static.historical_glof,
+            "meteo": {
+                "max_temp_anomaly_3d_c": meteo.max_temp_anomaly_3d_c,
+                "precip_14d_mm": meteo.precip_14d_mm,
+                "freezing_level_m": meteo.freezing_level_m,
+                "source": meteo.source,
+                "fetched_at": meteo.fetched_at,
+            }
+            if meteo is not None
+            else None,
         },
         "normalized_risks": risks,
         "exposure": exposure,

@@ -9,7 +9,8 @@ from datetime import date
 from unittest.mock import patch
 
 from pipeline.hazard import LakeStaticInputs
-from pipeline.hazard_batch import HazardRunResult, run_hazard_pass
+from pipeline.hazard_batch import run_hazard_pass
+from pipeline.meteo import MeteoInputs, MeteoUnavailableError
 
 
 @contextmanager
@@ -26,20 +27,37 @@ def _patched(
     observations=_UNSET,
     slope=15.0,
     exposure=_UNSET,
+    meteo=_UNSET,
+    meteo_side_effect=None,
     report_response=_UNSET,
     report_side_effect=None,
 ):
     static = static if static is not _UNSET else LakeStaticInputs("moraine", True, False)
     observations = observations if observations is not _UNSET else [(date(2026, 7, 1), 1.0)]
     exposure = exposure if exposure is not _UNSET else {"population_within_buffer": 100.0}
+    meteo = (
+        meteo
+        if meteo is not _UNSET
+        else MeteoInputs(
+            max_temp_anomaly_3d_c=1.5,
+            precip_14d_mm=10.0,
+            freezing_level_m=4200.0,
+            source="test",
+            fetched_at="2026-09-03T00:00:00Z",
+        )
+    )
     report_response = report_response if report_response is not _UNSET else {"alert": None}
 
+    meteo_kwargs = (
+        {"side_effect": meteo_side_effect} if meteo_side_effect else {"return_value": meteo}
+    )
     report_kwargs = (
         {"side_effect": report_side_effect} if report_side_effect else {"return_value": report_response}
     )
 
     # Return a plain list — callers use _run_with_patchers() rather than
     # indexing into this list directly, so order changes here are safe.
+    # report_hazard_score must be last so mocks[-1] is always mock_report.
     return [
         patch("pipeline.hazard_batch.connect", _fake_connect),
         patch(
@@ -50,6 +68,7 @@ def _patched(
         patch("pipeline.hazard_batch._observations", return_value=observations),
         patch("pipeline.hazard_batch.mean_slope_degrees", return_value=slope),
         patch("pipeline.hazard_batch.population_within_buffer", return_value=exposure),
+        patch("pipeline.hazard_batch.fetch_meteo_inputs", **meteo_kwargs),
         patch("pipeline.hazard_batch.report_hazard_score", **report_kwargs),
     ]
 
@@ -127,3 +146,41 @@ def test_run_hazard_pass_captures_exceptions_per_lake_without_sinking_the_pass()
     assert results[0].error == "API unreachable"
     assert results[0].score is None
     assert results[0].computed_at == ""  # error run — no timestamp
+
+
+def test_run_hazard_pass_includes_meteo_in_reported_components():
+    """When weather is available, meteo raw inputs are included in reported components."""
+    custom_meteo = MeteoInputs(
+        max_temp_anomaly_3d_c=3.2,
+        precip_14d_mm=45.0,
+        freezing_level_m=4900.0,
+        source="open-meteo-forecast",
+        fetched_at="2026-09-03T00:00:00Z",
+    )
+    patchers = _patched({"shishper": "lake-1"}, meteo=custom_meteo)
+    results, mocks = _run_with_patchers(patchers, lake_slugs=["shishper"])
+    mock_report = mocks[-1]
+
+    assert results[0].error is None
+    call_kwargs = mock_report.call_args
+    reported_components = call_kwargs.args[4]
+    assert reported_components["raw_inputs"]["meteo"]["max_temp_anomaly_3d_c"] == 3.2
+    assert reported_components["normalized_risks"]["thermal"] > 0.0
+
+
+def test_run_hazard_pass_gracefully_degrades_when_meteo_unavailable():
+    """When Open-Meteo raises MeteoUnavailableError, pass succeeds with thermal=0."""
+    patchers = _patched(
+        {"shishper": "lake-1"},
+        meteo_side_effect=MeteoUnavailableError("Open-Meteo API down"),
+    )
+    results, mocks = _run_with_patchers(patchers, lake_slugs=["shishper"])
+    mock_report = mocks[-1]
+
+    assert results[0].error is None
+    assert results[0].score is not None
+    call_kwargs = mock_report.call_args
+    reported_components = call_kwargs.args[4]
+    assert reported_components["raw_inputs"]["meteo"] is None
+    assert reported_components["normalized_risks"]["thermal"] == 0.0
+
