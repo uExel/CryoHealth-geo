@@ -131,22 +131,42 @@ Checked highest-first; the first threshold the score meets or exceeds wins:
 Per PRD §8, downstream population exposure informs *prioritization*, not the hazard
 tier itself, and is computed separately from the weighted score above.
 
-**Scope note**: PRD §8 describes "facilities within modeled flow path buffer" — true
-hydrological flow-path modeling (flow accumulation/routing from the DEM) is a
-significant scope item on its own and isn't required for the tier. This methodology
-computes exposure as real WorldPop population (`pipeline/exposure.py`, Pakistan, 2025,
-100m, constrained product) within a **straight-line 5km square buffer** around the
-lake's point coordinate — an honest, documented simplification of the eventual
-flow-routed version, using real population data and a real computed number, not a
-fabricated one. Stored in `components.exposure`; real flow-path modeling remains
-future work.
+**Method (Issue #19)**: `pipeline/exposure.py` traces a D8 steepest-descent flowline
+from the lake outlet dam using the Copernicus GLO-30 DEM, up to **50 km downstream**.
+Population is WorldPop Pakistan 2025 (100 m, constrained) within a **500 m half-width
+corridor** (1 km total) along that flowline — capturing valley-floor settlements that
+actually lie in the GLOF flood path.
+
+- **DEM**: Copernicus GLO-30 (same source as slope), via Planetary Computer STAC.
+- **Algorithm**: Priority-Flood pit filling → D8 flow direction → downstream flowline
+  trace → corridor mask → WorldPop intersection.
+- **Corridor parameters**: 50 km max length; 500 m half-width (configurable via
+  `EXPOSURE_CORRIDOR_HALF_WIDTH_M` env var).
+- **Outlet coordinates**: Each lake has an `outlet_lon`/`outlet_lat` (dam-toe point,
+  not lake centroid) recorded in `pipeline/lakes.py` with provenance comments.
+  Shishper is flagged as LOW confidence (dynamic ice dam). All six require visual
+  verification against current satellite imagery before production use.
+- **Fallback**: If D8 routing fails (e.g. flat DEM at outlet), the pipeline falls back
+  to the original 5 km radial buffer with a WARNING log; `method` field records which
+  path ran.
+
+> **Validation status**: The acceptance criterion — verified against Shishper and Passu
+> historical GLOF inundation footprints — is **pending Issue #26** (sub-issue of #19).
+> No public GeoJSON/Shapefile for these events was found (Dartmouth Flood Observatory,
+> Copernicus EMS, HDX searched 2026-09-10). Until Issue #26 is resolved, the D8
+> corridor infrastructure is delivered but the footprint-comparison criterion is not yet
+> met. See ADR 0003 for details.
 
 ## Known limitations (honest, not hidden)
 
 - Thresholds are a documented starting point, not calibrated against a real GLOF event.
 - Growth-only risk scoring misses rapid shrink as a possible active-drainage signal.
-- Exposure uses a straight-line buffer, not real flow-path routing.
-- Facilities/population *within* the buffer aren't broken out by type (school, clinic,
+- Exposure outlet coordinates (dam-toe) are manual estimates from satellite imagery
+  (2026-09-10); Shishper is LOW confidence (dynamic ice dam). Formal survey data from
+  GLOF-II project reports or ICIMOD would supersede these estimates.
+- Exposure validation against Shishper/Passu GLOF flood footprints is pending
+  Issue #26 — see ADR 0003.
+- Facilities/population *within* the corridor aren't broken out by type (school, clinic,
   settlement) — only a total population count.
 - Thermal temperature anomaly is evaluated relative to a 14-year ERA5 reanalysis baseline, which has
   grid-scale smoothing (~25km) over steep alpine topography; local microclimates (glacier katabatic
