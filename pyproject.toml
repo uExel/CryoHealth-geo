@@ -21,6 +21,14 @@ dev = [
     "pytest>=9.1.1",
     "ruff>=0.8.0",
 ]
+ml = [
+    # Optional: AlphaEarth embedding fetch + ONNX adapter inference (Issue #18).
+    # Install with: uv pip install 'cryohealth-geo[ml]'
+    # Base install and NDWI fallback are unaffected without this group.
+    "earthengine-api>=0.1.390",
+    "onnxruntime>=1.17.0",
+    "scipy>=1.14.0",
+]
 
 [tool.ruff]
 line-length = 110
@@ -31,3 +39,6 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "slow: integration tests that require real GEE credentials and/or ONNX weights (deselect with -m 'not slow')",
+]

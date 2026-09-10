@@ -26,8 +26,15 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from uuid import uuid4
 
+from pipeline.alphaearth_source import EmbeddingUnavailableError
+from pipeline.alphaearth_source import fetch_embeddings as ae_fetch_embeddings
+from pipeline.alphaearth_source import is_available as ae_is_available
 from pipeline.db import ObservationWrite, connect, lake_id_for_slug, refresh_staleness, upsert_observation
 from pipeline.lakes import LAKES
+from pipeline.ml_segmentation import InferenceUnavailableError
+from pipeline.ml_segmentation import is_available as ml_is_available
+from pipeline.ml_segmentation import run_inference as ml_run_inference
+from pipeline.ml_segmentation import water_area_km2_from_mask
 from pipeline.ndwi import cloud_fraction, cloud_mask, compute_ndwi, water_area_km2
 from pipeline.sar_source import extract_sar_water, sar_water_area_km2
 from pipeline.stac_source import SceneRef, SceneSource
@@ -43,8 +50,11 @@ SAR_TRIGGER_CLOUD_FRACTION = 0.40
 # during active melt (July–August) may represent a meaningfully different water extent.
 SAR_DATE_WINDOW_DAYS = 3
 
-# Source identifier stored in the observations table for SAR-derived water extents.
+# Source identifiers stored in the observations table — differentiates each water-
+# extraction path so every DB row is auditable without inspecting logs (ADR 0002).
 _SAR_SOURCE_ID = "sentinel1-grd-sar"
+_NDWI_SOURCE_ID = "sentinel2-ndwi"
+_ML_SEG_SOURCE_ID = "alphaearth-ml-seg"
 
 # Hard ceiling: optical scenes above this cloud fraction are discarded entirely
 # (no optical observation written). SAR fallback is attempted for scenes above
@@ -63,22 +73,48 @@ class LakeResult:
 
 def _process_scene(
     source: SceneSource, scene: SceneRef, bbox: tuple[float, float, float, float]
-) -> tuple[float, float] | None:
-    """Returns (area_km2, cloud_fraction) if the scene is usable at the AOI, else None.
+) -> tuple[float, float, str] | None:
+    """Returns (area_km2, cloud_fraction, source_id) if scene is usable, else None.
 
-    'Usable' means the measured cloud fraction at the AOI is at or below
-    USABLE_CLOUD_FRACTION_MAX (0.5).  Cloud fractions above SAR_TRIGGER_CLOUD_FRACTION
-    but at or below USABLE_CLOUD_FRACTION_MAX will still produce an optical observation;
-    only scenes *above* USABLE_CLOUD_FRACTION_MAX are discarded entirely (leaving the
-    SAR fallback as the only option via the caller in run_latest/run_backfill).
+    'Usable' means cloud fraction at the AOI is at or below USABLE_CLOUD_FRACTION_MAX.
+
+    Water-extraction path (ADR 0002 §Architecture):
+    1. AlphaEarth path: if both ae_is_available() and ml_is_available(), fetch
+       64-band embeddings from GEE and run ONNX adapter → source_id = 'alphaearth-ml-seg'.
+    2. NDWI fallback: on any EmbeddingUnavailableError or InferenceUnavailableError,
+       fall back to McFeeters NDWI → source_id = 'sentinel2-ndwi'.
+
+    source_id is recorded in the DB so every observation is auditable without logs.
     """
     bands = source.read_bands(scene, ["B03", "B08", "SCL"], bbox)
     usable = cloud_mask(bands["SCL"])
     clouds = cloud_fraction(usable)
     if clouds > USABLE_CLOUD_FRACTION_MAX:
         return None
+
+    # --- AlphaEarth + adapter path ---
+    if ae_is_available() and ml_is_available():
+        try:
+            year = scene.captured_at.year
+            embeddings = ae_fetch_embeddings(bbox, year)  # (64, H, W) — cached by (bbox, year)
+            mask = ml_run_inference(embeddings)            # (H, W) bool
+            mask = mask & usable                           # exclude cloud pixels
+            area = water_area_km2_from_mask(mask)
+            logger.debug(
+                "AlphaEarth+adapter path for scene %s (year=%d)", scene.scene_id, year
+            )
+            return area, clouds, _ML_SEG_SOURCE_ID
+        except (EmbeddingUnavailableError, InferenceUnavailableError) as exc:
+            logger.warning(
+                "AlphaEarth/adapter unavailable for scene %s — falling back to NDWI: %s",
+                scene.scene_id, exc,
+            )
+
+    # --- NDWI fallback (always available) ---
     ndwi = compute_ndwi(bands["B03"], bands["B08"])
-    return water_area_km2(ndwi, usable), clouds
+    area = water_area_km2(ndwi, usable)
+    logger.debug("NDWI path for scene %s", scene.scene_id)
+    return area, clouds, _NDWI_SOURCE_ID
 
 
 def _process_sar_scene(
@@ -152,7 +188,7 @@ def run_latest(
                     checked += 1
                     outcome = _process_scene(source, scene, lake.bbox())
                     if outcome is not None:
-                        area_km2, clouds = outcome
+                        area_km2, clouds, obs_source = outcome
                         obs = ObservationWrite(
                             lake_id=lake_id,
                             captured_at=scene.captured_at,
@@ -160,6 +196,7 @@ def run_latest(
                             cloud_fraction=clouds,
                             scene_id=scene.scene_id,
                             run_id=run_id,
+                            source=obs_source,
                         )
                         if upsert_observation(conn, obs):
                             written += 1
@@ -243,7 +280,7 @@ def run_backfill(
                                 if upsert_observation(conn, obs):
                                     written += 1
                         continue
-                    area_km2, clouds = outcome
+                    area_km2, clouds, obs_source = outcome
                     obs = ObservationWrite(
                         lake_id=lake_id,
                         captured_at=scene.captured_at,
@@ -251,6 +288,7 @@ def run_backfill(
                         cloud_fraction=clouds,
                         scene_id=scene.scene_id,
                         run_id=run_id,
+                        source=obs_source,
                     )
                     if upsert_observation(conn, obs):
                         written += 1
