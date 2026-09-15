@@ -8,6 +8,7 @@ dependencies = [
     "fastapi>=0.141.0",
     "httpx>=0.28.0",
     "numpy>=2.5.1",
+    "pandas>=2.2.0",
     "planetary-computer>=1.0.0",
     "psycopg[binary]>=3.3.0",
     "pystac-client>=0.9.0",
@@ -28,6 +29,14 @@ ml = [
     "earthengine-api>=0.1.390",
     "onnxruntime>=1.17.0",
     "scipy>=1.14.0",
+]
+forecast = [
+    # Optional: Prophet time-series forecasting for 14-day lake expansion prediction (Issue #21).
+    # Install with: uv pip install 'cryohealth-geo[forecast]'
+    # Note: prophet pulls pystan (C++ compiled) and holidays — significant install overhead.
+    # pandas is a base dependency and does not need to be included here.
+    # Base install, NDWI, SAR, AlphaEarth, and hazard scoring are unaffected without this group.
+    "prophet>=1.1.6",
 ]
 
 [tool.ruff]
