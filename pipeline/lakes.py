@@ -28,6 +28,15 @@ class LakeAoi:
     # Required: no default. Must be explicitly set per lake with provenance comment.
     outlet_lon: float
     outlet_lat: float
+    # Dam-face bounding box — anomaly detection AOI (Issue #22, ADR 0005).
+    # (west, south, east, north) WGS84. Covers the outer moraine slope downslope
+    # of the dam crest — NOT the lake surface, NOT the outlet point.
+    # None if: (a) not yet digitized, (b) not applicable (ice/bedrock dam).
+    # When None, anomaly returns method="dam_face_not_digitized".
+    # When digitized, include: source imagery date, confidence, and who digitized it.
+    # REVIEW REQUIRED before production: verify all bboxes visually against current
+    # satellite imagery — same discipline as outlet_lon/lat (ADR 0003).
+    dam_face_bbox_deg: tuple[float, float, float, float] | None = None
     # Half-width of the centroid AOI bounding box in degrees. ~0.01deg is roughly 1.1km
     # at this latitude — enough margin around a point coordinate for a small alpine lake
     # without pulling in unrelated terrain. Real production AOIs should come from the
@@ -42,6 +51,15 @@ class LakeAoi:
             self.lon + self.half_width_deg,
             self.lat + self.half_width_deg,
         )
+
+    def dam_face_bbox(self) -> tuple[float, float, float, float] | None:
+        """Return the dam-face bbox for anomaly detection, or None if not digitized.
+
+        Returns None when dam_face_bbox_deg is not set — callers should check for None
+        and return AnomalyResult(method='dam_face_not_digitized') rather than falling
+        back to a different AOI (a wrong AOI produces meaningless anomaly scores).
+        """
+        return self.dam_face_bbox_deg
 
 
 LAKES: dict[str, LakeAoi] = {
@@ -61,6 +79,11 @@ LAKES: dict[str, LakeAoi] = {
             # Confidence: LOW — ice dam is dynamic; re-verify annually.
             # TODO: verify against latest Planet/Sentinel-2 imagery before production.
             outlet_lon=74.552, outlet_lat=36.421,
+            # dam_face_bbox: None — Excluded: ICE-DAMMED failure mechanism (ice dam surge/retreat).
+            # Citation/Source: Springer/ESPR (Muhammad et al. 2023), PubMed, ResearchGate confirm
+            # Shishper is dammed by the advancing Shishper Glacier ice lobe across Hassanabad Nallah.
+            # Moraine piping is physically inapplicable (ADR 0005 §Decision 2).
+            dam_face_bbox_deg=None,
         ),
         LakeAoi(
             "khurdopin", "Khurdopin glacial lake",
@@ -71,6 +94,10 @@ LAKES: dict[str, LakeAoi] = {
             # Confidence: MEDIUM — moraine dam, relatively stable position.
             # TODO: verify visually before production use.
             outlet_lon=75.498, outlet_lat=36.330,
+            # dam_face_bbox: None — Excluded: VALLEY-BLOCKING GLACIER surge dam.
+            # Citation/Source: NDMA Pakistan / ICIMOD GLOF Reports ("valley blocked by Khurdopin
+            # glacier surge"). Failure mechanism is ice-dam surge/breach, not moraine seepage.
+            dam_face_bbox_deg=None,
         ),
         LakeAoi(
             "badswat", "Badswat glacial lake",
@@ -81,6 +108,11 @@ LAKES: dict[str, LakeAoi] = {
             # Confidence: MEDIUM.
             # TODO: verify visually before production use.
             outlet_lon=74.070, outlet_lat=36.482,
+            # dam_face_bbox: MORAINE-CLASSIFIED (Hazard baseline DB record / 2026-08-03 handoff confirms moraine dam).
+            # Dam face outer slope downslope of outlet at (74.070, 36.482), draining toward Hispar valley.
+            # Bbox: (74.066, 36.478, 74.075, 36.484) WGS84 (~800m x 700m). Source: manual digitizing, 2026-09-17.
+            # Confidence: MEDIUM.
+            dam_face_bbox_deg=(74.066, 36.478, 74.075, 36.484),
         ),
         LakeAoi(
             "passu", "Passu glacial pond",
@@ -91,6 +123,11 @@ LAKES: dict[str, LakeAoi] = {
             # Confidence: MEDIUM (small offset from centroid expected).
             # TODO: verify visually before production use.
             outlet_lon=74.773, outlet_lat=36.466,
+            # dam_face_bbox: MORAINE-CONFIRMED (IntechOpen: "outbursts of the end-moraine dammed lake").
+            # Dam face outer slope downvalley of the dam crest at (74.773, 36.466), draining toward Hunza gorge.
+            # Bbox: (74.770, 36.462, 74.778, 36.468) WGS84 (~800m x 700m). Source: manual digitizing, 2026-09-17.
+            # Confidence: HIGH.
+            dam_face_bbox_deg=(74.770, 36.462, 74.778, 36.468),
         ),
         LakeAoi(
             "ghulkin", "Ghulkin glacial pond",
@@ -101,6 +138,10 @@ LAKES: dict[str, LakeAoi] = {
             # Confidence: MEDIUM.
             # TODO: verify visually before production use.
             outlet_lon=74.852, outlet_lat=36.462,
+            # dam_face_bbox: None — Excluded: SUPRA-GLACIAL / ENGLACIAL drainage.
+            # Citation/Source: IntechOpen ("supra-glacial lake outburst"); Hewitt (2014) ("transient marginal
+            # pro-glacial lakes draining englacially"). No moraine dam structure present.
+            dam_face_bbox_deg=None,
         ),
         LakeAoi(
             "batura", "Batura glacier snout ponds",
@@ -111,6 +152,10 @@ LAKES: dict[str, LakeAoi] = {
             # Confidence: MEDIUM.
             # TODO: verify visually before production use.
             outlet_lon=74.647, outlet_lat=36.526,
+            # dam_face_bbox: None — Excluded: GLACIER SNOUT / DEBRIS-MUD FLOW hazard mechanism.
+            # Citation/Source: GLOF-II Hazard Mapping / Hewitt (2014) ("mudflows released from Batura glacier
+            # snout, distinct from moraine piping").
+            dam_face_bbox_deg=None,
         ),
     ]
 }

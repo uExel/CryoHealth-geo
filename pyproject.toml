@@ -38,6 +38,15 @@ forecast = [
     # Base install, NDWI, SAR, AlphaEarth, and hazard scoring are unaffected without this group.
     "prophet>=1.1.6",
 ]
+anomaly = [
+    # Optional: Isolation Forest anomaly detection for moraine dam-face seepage (Issue #22).
+    # Install with: uv pip install 'cryohealth-geo[anomaly]'
+    # scikit-learn + joblib — ~50 MB install (much lighter than [forecast] or [ml]).
+    # Base install, NDWI, hazard scoring, and forecast are unaffected without this group.
+    "scikit-learn>=1.5.0",
+    "joblib>=1.4.0",
+]
+
 
 [tool.ruff]
 line-length = 110

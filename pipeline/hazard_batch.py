@@ -12,15 +12,20 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from uuid import uuid4
 
+import dataclasses
+import os
 import psycopg
 
+from pipeline.anomaly import AnomalyUnavailableError, compute_anomaly
 from pipeline.db import connect, lake_id_for_slug
 from pipeline.dem import mean_slope_degrees
 from pipeline.exposure import population_within_buffer
+from pipeline.forecast import ForecastUnavailableError, compute_forecast
 from pipeline.hazard import LakeStaticInputs, compute_hazard_score
 from pipeline.hazard_client import report_hazard_score
 from pipeline.lakes import LAKES
 from pipeline.meteo import MeteoInputs, MeteoUnavailableError, fetch_meteo_inputs
+from pipeline.stac_source import PlanetaryComputerSource
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +34,11 @@ logger = logging.getLogger(__name__)
 #   Seasonal anomaly needs one prior calendar-year month = ~395 days
 #   Safety margin -> 548 days total (≈18 months)
 OBSERVATION_LOOKBACK_DAYS = 548
+
+# Directory containing per-lake Isolation Forest .joblib + .json sidecar files.
+# Set ANOMALY_MODEL_DIR env var to override (e.g. in docker-compose).
+# None disables anomaly detection for the entire batch run with a WARNING.
+ANOMALY_MODEL_DIR: str | None = os.environ.get("ANOMALY_MODEL_DIR")
 
 
 @dataclass
@@ -39,6 +49,10 @@ class HazardRunResult:
     alert_created: bool = False
     error: str | None = None
     computed_at: str = ""  # ISO 8601 UTC; non-empty only on success
+    # Advisory signals (Issue #21, #22) — separate from the hazard score.
+    # None when the relevant extra is not installed or model is unavailable.
+    forecast: dict | None = None
+    anomaly: dict | None = None
 
 
 def _lake_static_inputs(conn: psycopg.Connection, lake_id: str) -> LakeStaticInputs | None:
@@ -149,8 +163,50 @@ def run_hazard_pass(lake_slugs: list[str] | None = None, as_of: date | None = No
             result = compute_hazard_score(
                 observations, static, slope, as_of, exposure, meteo=meteo
             )
+
+            # --- Advisory signals (Issues #21, #22): forecast + anomaly ----------
+            # Neither modifies compute_hazard_score() — both are separate signals.
+            # Neither triggers alerts directly (ADR 0004, ADR 0005).
+            forecast_dict: dict | None = None
+            try:
+                forecast_result = compute_forecast(observations, as_of=as_of)
+                forecast_dict = dataclasses.asdict(forecast_result)
+            except ForecastUnavailableError as exc:
+                logger.warning("Forecast unavailable for %s: %s", slug, exc)
+
+            anomaly_dict: dict | None = None
+            if ANOMALY_MODEL_DIR is not None:
+                try:
+                    source = PlanetaryComputerSource()
+                    anomaly_result = compute_anomaly(
+                        source=source,
+                        dam_face_bbox=lake.dam_face_bbox(),
+                        dam_type=static.dam_type,
+                        model_dir=ANOMALY_MODEL_DIR,
+                        slug=slug,
+                        as_of=as_of,
+                    )
+                    anomaly_dict = dataclasses.asdict(anomaly_result)
+                except AnomalyUnavailableError as exc:
+                    logger.warning("Anomaly detection unavailable for %s: %s", slug, exc)
+            else:
+                logger.debug(
+                    "ANOMALY_MODEL_DIR not set — anomaly detection skipped for %s. "
+                    "Set env var ANOMALY_MODEL_DIR after running fit_anomaly_model.py.",
+                    slug,
+                )
+
+            # Merge advisory signals into components alongside the hazard score.
+            # components["forecast"] and components["anomaly"] are explicitly labeled;
+            # they are never blended into the composite score (ADR 0004, ADR 0005).
+            components_with_advisories = {
+                **result.components,
+                "forecast": forecast_dict,
+                "anomaly": anomaly_dict,
+            }
+
             response = report_hazard_score(
-                str(lake_id), run_id, result.score, result.tier, result.components
+                str(lake_id), run_id, result.score, result.tier, components_with_advisories
             )
             results.append(
                 HazardRunResult(
@@ -159,6 +215,8 @@ def run_hazard_pass(lake_slugs: list[str] | None = None, as_of: date | None = No
                     tier=result.tier,
                     alert_created=response.get("alert") is not None,
                     computed_at=datetime.now(UTC).isoformat(),
+                    forecast=forecast_dict,
+                    anomaly=anomaly_dict,
                 )
             )
         except Exception as exc:  # noqa: BLE001 — one lake's failure must not sink the pass
