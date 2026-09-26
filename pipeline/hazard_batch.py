@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from uuid import uuid4
 
 import psycopg
@@ -147,7 +147,7 @@ def run_hazard_pass(lake_slugs: list[str] | None = None, as_of: date | None = No
                     score=result.score,
                     tier=result.tier,
                     alert_created=response.get("alert") is not None,
-                    computed_at=datetime.now(timezone.utc).isoformat(),
+                    computed_at=datetime.now(UTC).isoformat(),
                 )
             )
         except Exception as exc:  # noqa: BLE001 — one lake's failure must not sink the pass

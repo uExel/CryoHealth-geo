@@ -9,7 +9,7 @@ from datetime import date
 from unittest.mock import patch
 
 from pipeline.hazard import LakeStaticInputs
-from pipeline.hazard_batch import HazardRunResult, run_hazard_pass
+from pipeline.hazard_batch import run_hazard_pass
 
 
 @contextmanager
